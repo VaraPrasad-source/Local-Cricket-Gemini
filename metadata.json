@@ -1,0 +1,6 @@
+{
+  "name": "Local Cricket App",
+  "description": "Manage local cricket tournament matches, scorecards, points tables, team members, and group meetings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
