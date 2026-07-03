@@ -12,8 +12,7 @@ export function renderLogin(app, navigate, params = {}) {
           <span class="material-symbols-rounded icon">
             sports_cricket
           </span>
-          <h1>local Crickret App</h1>
-          <p>Live Scores, Tournaments & Fan Engagement Portal</p>
+          <h1>Local Cricket App</h1>
         </div>
 
         <form id="loginForm" class="login-form" autocomplete="off">

@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "523544090143",
+    "project_id": "gemini-local-cricket-app",
+    "storage_bucket": "gemini-local-cricket-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:523544090143:android:9363d3d3ba81738ec4272a",
+        "android_client_info": {
+          "package_name": "com.vara.localcricket"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "523544090143-8h553e5ql0hr31o9l1vk84tn0uhdp11k.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA7OMxtvfaqh_ukHVWt1o5p_-CRv9xuRV0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "523544090143-8h553e5ql0hr31o9l1vk84tn0uhdp11k.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

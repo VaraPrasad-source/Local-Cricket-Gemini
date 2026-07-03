@@ -58,7 +58,7 @@ class DataStore {
     
     try {
       const { collection, getDocs } = await import('firebase/firestore');
-      const collections = ['seasons', 'matches', 'players', 'points', 'schedule', 'awards', 'users', 'group_meetings'];
+      const collections = ['seasons', 'matches', 'players', 'points', 'schedule', 'awards', 'users', 'group_meetings', 'notifications'];
       
       console.log('🔄 Syncing data from Firestore...');
       for (const collName of collections) {
@@ -188,29 +188,29 @@ class DataStore {
   }
   getSeason(id) { return this.getSeasons().find(s => s.id === id); }
   deleteSeason(id) {
-    this._set('lca_seasons', this.getSeasons().filter(s => s.id !== id));
+    this._set('lca_seasons', (this.getSeasons() || []).filter(s => s && s.id !== id));
     this.pushToFirebase('seasons', id, null, true);
 
     // Also delete associated data locally and in Firebase
-    const matchesToDelete = this.getMatches().filter(m => m.seasonId === id);
-    this._set('lca_matches', this.getMatches().filter(m => m.seasonId !== id));
-    matchesToDelete.forEach(m => this.pushToFirebase('matches', m.id, null, true));
+    const matchesToDelete = (this.getMatches() || []).filter(m => m && m.seasonId === id);
+    this._set('lca_matches', (this.getMatches() || []).filter(m => !m || m.seasonId !== id));
+    matchesToDelete.forEach(m => m && m.id && this.pushToFirebase('matches', m.id, null, true));
 
-    const pointsToDelete = this.getPoints().filter(p => p.seasonId === id);
-    this._set('lca_points', this.getPoints().filter(p => p.seasonId !== id));
-    pointsToDelete.forEach(p => this.pushToFirebase('points', p.id, null, true));
+    const pointsToDelete = (this.getPoints() || []).filter(p => p && p.seasonId === id);
+    this._set('lca_points', (this.getPoints() || []).filter(p => !p || p.seasonId !== id));
+    pointsToDelete.forEach(p => p && p.id && this.pushToFirebase('points', p.id, null, true));
 
-    const scheduleToDelete = this.getSchedule().filter(s => s.seasonId === id);
-    this._set('lca_schedule', this.getSchedule().filter(s => s.seasonId !== id));
-    scheduleToDelete.forEach(s => this.pushToFirebase('schedule', s.id, null, true));
+    const scheduleToDelete = (this.getSchedule() || []).filter(s => s && s.seasonId === id);
+    this._set('lca_schedule', (this.getSchedule() || []).filter(s => !s || s.seasonId !== id));
+    scheduleToDelete.forEach(s => s && s.id && this.pushToFirebase('schedule', s.id, null, true));
 
-    const playersToDelete = this.getPlayers().filter(p => p.seasonId === id);
-    this._set('lca_players', this.getPlayers().filter(p => p.seasonId !== id));
-    playersToDelete.forEach(p => this.pushToFirebase('players', p.id, null, true));
+    const playersToDelete = (this.getPlayers() || []).filter(p => p && p.seasonId === id);
+    this._set('lca_players', (this.getPlayers() || []).filter(p => !p || p.seasonId !== id));
+    playersToDelete.forEach(p => p && p.id && this.pushToFirebase('players', p.id, null, true));
 
-    const awardsToDelete = this._get('lca_awards').filter(a => a.seasonId === id);
-    this._set('lca_awards', this._get('lca_awards').filter(a => a.seasonId !== id));
-    awardsToDelete.forEach(a => this.pushToFirebase('awards', a.id, null, true));
+    const awardsToDelete = (this._get('lca_awards') || []).filter(a => a && a.seasonId === id);
+    this._set('lca_awards', (this._get('lca_awards') || []).filter(a => !a || a.seasonId !== id));
+    awardsToDelete.forEach(a => a && a.id && this.pushToFirebase('awards', a.id, null, true));
   }
 
   // --- Matches ---
@@ -389,6 +389,49 @@ class DataStore {
       return meetings[idx];
     }
     return null;
+  }
+
+  // --- Notifications ---
+  getNotifications() {
+    return this._get('lca_notifications') || [];
+  }
+  addNotification(notification) {
+    const notifications = this.getNotifications();
+    notification.id = notification.id || generateId();
+    notification.createdAt = notification.createdAt || new Date().toISOString();
+    notification.read = notification.read !== undefined ? notification.read : false;
+    notifications.push(notification);
+    this._set('lca_notifications', notifications);
+    this.pushToFirebase('notifications', notification.id, notification);
+    return notification;
+  }
+  markNotificationAsRead(id) {
+    const notifications = this.getNotifications();
+    const idx = notifications.findIndex(n => n.id === id);
+    if (idx !== -1) {
+      notifications[idx].read = true;
+      this._set('lca_notifications', notifications);
+      this.pushToFirebase('notifications', id, notifications[idx]);
+    }
+  }
+  markAllNotificationsAsRead(recipient) {
+    const notifications = this.getNotifications();
+    let updated = false;
+    notifications.forEach(n => {
+      if ((n.recipient === recipient || n.recipient === 'all') && !n.read) {
+        n.read = true;
+        updated = true;
+        this.pushToFirebase('notifications', n.id, n);
+      }
+    });
+    if (updated) {
+      this._set('lca_notifications', notifications);
+    }
+  }
+  deleteNotification(id) {
+    const notifications = this.getNotifications().filter(n => n.id !== id);
+    this._set('lca_notifications', notifications);
+    this.pushToFirebase('notifications', id, null, true);
   }
 }
 

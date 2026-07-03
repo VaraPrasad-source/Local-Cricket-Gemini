@@ -2,8 +2,9 @@
 // WORKSPACE — Tournament Hub (All 5 Tabs)
 // ============================================
 import { store } from '../store.js';
-import { showToast, icon, escapeHtml, calcStrikeRate, calcEconomy, calcPoints } from '../utils/helpers.js';
+import { showToast, icon, escapeHtml, calcStrikeRate, calcEconomy, calcPoints, setupNotifications, showConfirm, videoStore } from '../utils/helpers.js';
 import { TAB_CONFIG, TABS, PLAYER_ROLES, AWARD_TYPES, AWARD_BOTTOM, ADMIN_PASSWORD } from '../utils/constants.js';
+import { uploadVideoToFirebase } from '../firebase.js';
 
 export function renderWorkspace(app, navigate, params = {}) {
   const seasonId = params.seasonId;
@@ -12,9 +13,10 @@ export function renderWorkspace(app, navigate, params = {}) {
 
   let user = store.getCurrentUser();
   let isAdmin = store.isAdmin();
-  let activeTab = TABS.MATCH_DETAILS;
-  let activeMeetingId = null;
+  let activeTab = params.initialTab || TABS.MATCH_DETAILS;
+  let activeMeetingId = params.meetingId || null;
   let chatInterval = null;
+  let matchStageFilter = 'all';
 
   function render() {
     user = store.getCurrentUser();
@@ -34,8 +36,25 @@ export function renderWorkspace(app, navigate, params = {}) {
             </div>
             <!-- Profile dropdown on the right side of the top bar -->
             <div style="display:flex;gap:var(--sp-2);align-items:center;flex-shrink:0;">
+              
+              <!-- Notifications Dropdown -->
               <div style="position:relative">
-                <button class="btn-icon" id="userMenuBtn" title="Profile">${icon('account_circle', 24)}</button>
+                <button class="btn-icon" id="notificationBtn" title="Notifications" style="position:relative; width:38px; height:38px; display:flex; align-items:center; justify-content:center;">
+                  ${icon('notifications', 22)}
+                </button>
+                <div class="notification-dropdown hidden" id="notificationDropdown" style="position:absolute; right:0; top:44px; background:var(--bg-modal); border:1px solid var(--bg-card-border); border-radius:var(--radius-md); padding:var(--sp-2); width:320px; max-height:400px; overflow-y:auto; z-index:100; box-shadow:var(--shadow-lg);">
+                  <div style="padding:var(--sp-2) var(--sp-3); border-bottom:1px solid var(--bg-card-border); display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-weight:var(--fw-bold); font-size:var(--fs-sm);">Notifications</span>
+                    <button class="btn btn-ghost btn-sm" id="markAllReadBtn" style="font-size:10px; padding:2px 6px; display:none;">Mark all as read</button>
+                  </div>
+                  <div id="notificationListContainer" style="margin-top:var(--sp-2); display:flex; flex-direction:column; gap:4px;">
+                    <!-- items will be injected here -->
+                  </div>
+                </div>
+              </div>
+
+              <div style="position:relative">
+                <button class="btn-icon" id="userMenuBtn" title="Profile" style="width:38px; height:38px; display:flex; align-items:center; justify-content:center;">${icon('account_circle', 24)}</button>
                 <div class="user-dropdown hidden" id="userDropdown" style="position:absolute;right:0;top:44px;background:var(--bg-modal);border:1px solid var(--bg-card-border);border-radius:var(--radius-md);padding:var(--sp-2);min-width:180px;z-index:100;box-shadow:var(--shadow-lg)">
                   <div style="padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--bg-card-border);margin-bottom:var(--sp-2)">
                     <div style="font-weight:var(--fw-bold);font-size:var(--fs-sm);color:var(--text-primary);text-align:left;">${escapeHtml(user?.fullName || 'User')}</div>
@@ -92,7 +111,12 @@ export function renderWorkspace(app, navigate, params = {}) {
     document.addEventListener('click', () => {
       const dd = document.getElementById('userDropdown');
       if (dd) dd.classList.add('hidden');
+      const nd = document.getElementById('notificationDropdown');
+      if (nd) nd.classList.add('hidden');
     });
+
+    // Setup Notifications
+    setupNotifications(user, navigate, store);
 
     document.getElementById('profileBtn')?.addEventListener('click', () => {
       if (chatInterval) {
@@ -132,29 +156,84 @@ export function renderWorkspace(app, navigate, params = {}) {
   // ═══════════════════════════════════════════
   function renderMatchDetails(container) {
     const matches = store.getMatches(seasonId);
+    let newestMatchId = null;
+    if (matches.length > 0) {
+      const matchesWithTime = matches.filter(m => m.createdAt);
+      if (matchesWithTime.length > 0) {
+        // Find newest by createdAt date descending
+        const sorted = [...matchesWithTime].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        newestMatchId = sorted[0].id;
+      } else {
+        // Fallback to the last match in the list
+        newestMatchId = matches[matches.length - 1].id;
+      }
+    }
+
+    const filteredMatches = matches.filter(m => {
+      if (matchStageFilter === 'all') return true;
+      if (matchStageFilter === 'regular') return !m.stage || m.stage === 'regular';
+      return m.stage === matchStageFilter;
+    });
+
     container.innerHTML = `
       <div class="section-header">
         <span class="section-title section-title-green">Season Match Details Ledger</span>
         ${isAdmin ? `<button class="btn btn-primary btn-sm" id="createMatchBtn">${icon('add', 16)} Create Match Record</button>` : ''}
       </div>
+      
+      <!-- Match Stage / Round Filter bar -->
+      <div class="stage-filter-bar">
+        <span class="stage-filter-label" style="font-size:var(--fs-xs); color:var(--text-muted); font-weight:var(--fw-bold); margin-left:var(--sp-2); margin-right:var(--sp-2);">Stage Filter:</span>
+        <button class="btn ${matchStageFilter === 'all' ? 'btn-primary' : 'btn-ghost'} btn-sm" id="btnFilterAll" style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12px;">
+          ${icon('sports_cricket', 14)} All Matches
+        </button>
+        <button class="btn ${matchStageFilter === 'regular' ? 'btn-primary' : 'btn-ghost'} btn-sm" id="btnFilterRegular" style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12px;">
+          ${icon('table_rows', 14)} League Stage
+        </button>
+        <button class="btn ${matchStageFilter === 'semifinal' ? 'btn-primary' : 'btn-ghost'} btn-sm" id="btnFilterSemi" style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12px; ${matchStageFilter !== 'semifinal' ? 'color:#a855f7;' : ''}">
+          ${icon('shield', 14)} Semi-Finals
+        </button>
+        <button class="btn ${matchStageFilter === 'final' ? 'btn-primary' : 'btn-ghost'} btn-sm" id="btnFilterFinal" style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12px; ${matchStageFilter !== 'final' ? 'color:#eab308;' : ''}">
+          ${icon('emoji_events', 14)} Final
+        </button>
+      </div>
+
       <div id="matchesList">
-        ${matches.length === 0
-          ? '<div class="empty-state"><span class="material-symbols-rounded">sports_cricket</span><p>No matches recorded yet.</p></div>'
-          : matches.map(m => renderMatchBlock(m)).join('')
+        ${filteredMatches.length === 0
+          ? '<div class="empty-state"><span class="material-symbols-rounded">sports_cricket</span><p>No matches recorded for this tournament stage.</p></div>'
+          : filteredMatches.map(m => renderMatchBlock(m, m.id === newestMatchId)).join('')
         }
       </div>
     `;
 
     document.getElementById('createMatchBtn')?.addEventListener('click', () => showMatchModal());
 
+    document.getElementById('btnFilterAll')?.addEventListener('click', () => {
+      matchStageFilter = 'all';
+      renderMatchDetails(container);
+    });
+    document.getElementById('btnFilterRegular')?.addEventListener('click', () => {
+      matchStageFilter = 'regular';
+      renderMatchDetails(container);
+    });
+    document.getElementById('btnFilterSemi')?.addEventListener('click', () => {
+      matchStageFilter = 'semifinal';
+      renderMatchDetails(container);
+    });
+    document.getElementById('btnFilterFinal')?.addEventListener('click', () => {
+      matchStageFilter = 'final';
+      renderMatchDetails(container);
+    });
+
+
     // Delete match buttons
     document.querySelectorAll('.delete-match-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        if (confirm('Delete this match record?')) {
+        showConfirm('Delete Match Record', 'Are you sure you want to delete this match record? All scorecards and records will be permanent loss.', () => {
           store.deleteMatch(btn.dataset.id);
           showToast('Match deleted', 'success');
           renderMatchDetails(container);
-        }
+        });
       });
     });
 
@@ -165,35 +244,236 @@ export function renderWorkspace(app, navigate, params = {}) {
         if (match) showMatchModal(match);
       });
     });
+
+    // Invite match players buttons
+    document.querySelectorAll('.invite-match-players-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        showMatchInviteModal(btn.dataset.id);
+      });
+    });
+
+
+    // Play video click listener
+    document.querySelectorAll('[data-play-video-id]').forEach(card => {
+      card.addEventListener('click', async () => {
+        const matchId = card.getAttribute('data-play-video-id');
+        const match = store.getMatch(matchId);
+        if (!match) return;
+
+        try {
+          if (match.videoUrl) {
+            // Live URL streaming or YouTube embed
+            showVideoPlayerModal(match, match.videoUrl, false);
+          } else {
+            // Local offline Blob
+            const videoFile = await videoStore.getVideo(matchId);
+            if (videoFile) {
+              const videoUrl = URL.createObjectURL(videoFile);
+              showVideoPlayerModal(match, videoUrl, true);
+            } else {
+              showToast('Video data not found. Please edit this match and upload the video file or add a streaming web URL.', 'warning');
+            }
+          }
+        } catch (err) {
+          console.error('Error fetching video from IndexedDB:', err);
+          showToast('Could not load original video file from local store.', 'error');
+        }
+      });
+    });
   }
 
-  function renderMatchBlock(m) {
-    const battingRows = (m.batting || []).map(b => `
-      <tr>
-        <td>${escapeHtml(b.name)}</td>
-        <td>${b.runs} (${b.balls})</td>
-        <td>${b.fours}</td>
-        <td>${b.sixes}</td>
-        <td class="col-green">${calcStrikeRate(b.runs, b.balls)}</td>
-      </tr>
-    `).join('');
+  function renderMatchBlock(m, isNewest = false) {
+    const play1stBatting = (m.batting || []).filter(b => b.innings !== '2');
+    const play2ndBatting = (m.batting || []).filter(b => b.innings === '2');
 
-    const bowlingRows = (m.bowling || []).map(b => `
-      <tr>
-        <td>${escapeHtml(b.name)}</td>
-        <td>${b.overs}</td>
-        <td>${b.maidens}</td>
-        <td>${b.runsGiven}</td>
-        <td class="col-green">${calcEconomy(b.runsGiven, b.overs)}</td>
-      </tr>
-    `).join('');
+    const play1stBowling = (m.bowling || []).filter(b => b.innings !== '2');
+    const play2ndBowling = (m.bowling || []).filter(b => b.innings === '2');
+
+    const renderBattingTableHTML = (rows, title) => {
+      if (!rows || rows.length === 0) return '';
+      const battingCards = rows.map(b => {
+        const srValue = Number(calcStrikeRate(b.runs, b.balls));
+        let srBadge = '';
+        if (srValue >= 200) {
+          srBadge = `<span style="background:rgba(239, 68, 68, 0.15); color:#ef4444; font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px; border:1px solid rgba(239, 68, 68, 0.25)">⚡ Rapid 200+</span>`;
+        } else if (srValue >= 150) {
+          srBadge = `<span style="background:rgba(249, 115, 22, 0.15); color:#f97316; font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px; border:1px solid rgba(249, 115, 22, 0.25)">⚡ Fast</span>`;
+        }
+
+        let runsBadge = '';
+        if (Number(b.runs) >= 100) {
+          runsBadge = `<span style="background:rgba(224, 166, 12, 0.15); color:#eab308; border:1px solid rgba(224, 166, 12, 0.3); font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px;">👑 Century 100+</span>`;
+        } else if (Number(b.runs) >= 50) {
+          runsBadge = `<span style="background:rgba(12, 166, 120, 0.15); color:#10b981; border:1px solid rgba(12, 166, 120, 0.3); font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px;">⭐ 50+</span>`;
+        }
+
+        const isSuperStar = Number(b.runs) >= 50 || srValue >= 180;
+        const cardStyle = isSuperStar 
+          ? 'background: linear-gradient(135deg, rgba(30, 201, 166, 0.12) 0%, rgba(30, 201, 166, 0.03) 100%); border: 1px solid rgba(30, 201, 166, 0.3);' 
+          : 'background: var(--bg-card, #111a1c); border: 1px solid var(--bg-card-border, rgba(255,255,255,0.08));';
+
+        return `
+          <div class="scorecard-vertical-box animate-slide-up" style="${cardStyle} border-radius: var(--radius-lg); padding: var(--sp-3) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+            <!-- Batter Header -->
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: var(--sp-2);">
+              <span style="font-weight: 700; font-size: var(--fs-md); color: var(--text-primary);">${escapeHtml(b.name)}</span>
+              <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                ${runsBadge}
+              </div>
+            </div>
+            
+            <!-- Quick Stats Row -->
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <span style="font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 2px;">Runs</span>
+                <span style="font-size: 18px; color: #eab308; font-weight: var(--fw-black);">${b.runs} <span style="font-size: 11px; font-weight: normal; color: var(--text-muted); font-family: var(--font-mono);">(${b.balls}b)</span></span>
+              </div>
+              <div style="text-align: right;">
+                <span style="font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 2px;">Strike Rate</span>
+                <span class="col-green" style="font-family: var(--font-mono); font-size: var(--fs-md); font-weight: bold; display: inline-flex; align-items: center; gap: 4px;">
+                  ${srValue} ${srBadge}
+                </span>
+              </div>
+            </div>
+
+            <!-- Fours & Sixes -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); background: rgba(0,0,0,0.15); border-radius: var(--radius-md); padding: var(--sp-2); text-align: center;">
+              <div>
+                <span style="font-size: 10px; color: var(--text-muted); display: block; text-transform: uppercase;">4s</span>
+                <span style="font-weight: var(--fw-bold); color: var(--text-primary); font-size: var(--fs-sm);">${b.fours || 0}</span>
+              </div>
+              <div style="border-left: 1px solid rgba(255,255,255,0.06);">
+                <span style="font-size: 10px; color: var(--text-muted); display: block; text-transform: uppercase;">6s</span>
+                <span style="font-weight: var(--fw-bold); color: var(--text-primary); font-size: var(--fs-sm);">${b.sixes || 0}</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="scorecard-section" style="margin-top:var(--sp-4);">
+          <div style="background:linear-gradient(90deg, rgba(var(--accent-primary-rgb, 12, 166, 120), 0.15) 0%, transparent 100%); padding:var(--sp-2) var(--sp-4); border-left:3px solid var(--accent-primary, #0ca678); border-radius: 0 var(--radius-md) var(--radius-md) 0; margin-bottom:var(--sp-3); display:flex; align-items:center; gap:var(--sp-2);">
+            <span class="material-symbols-rounded" style="color:var(--accent-primary, #0ca678); font-size:18px;">sports_cricket</span>
+            <div style="font-family:var(--font-heading); font-size:0.85rem; font-weight:var(--fw-extrabold); text-transform:uppercase; letter-spacing:0.05em; color:var(--text-primary);">${escapeHtml(title)}</div>
+          </div>
+          <div class="scorecard-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: var(--sp-3); margin-bottom: var(--sp-4);">
+            ${battingCards}
+          </div>
+        </div>
+      `;
+    };
+
+    const renderBowlingTableHTML = (rows, title) => {
+      if (!rows || rows.length === 0) return '';
+      const bowlingCards = rows.map(b => {
+        const economyVal = Number(calcEconomy(b.runsGiven, b.overs));
+        let economyBadge = '';
+        if (economyVal > 0 && economyVal < 6.0) {
+          economyBadge = `<span style="background:rgba(34, 197, 94, 0.15); color:#22c55e; border:1px solid rgba(34, 197, 94, 0.25); font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px;">🛡️ Tight</span>`;
+        } else if (economyVal > 0 && economyVal < 8.0) {
+          economyBadge = `<span style="background:rgba(59, 130, 246, 0.15); color:#3b82f6; border:1px solid rgba(59, 130, 246, 0.25); font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px;">⭐ Good</span>`;
+        }
+
+        const isSuperStar = Number(b.maidens) > 0 || (economyVal > 0 && economyVal < 6.0);
+        const cardStyle = isSuperStar 
+          ? 'background: linear-gradient(135deg, rgba(34, 197, 94, 0.12) 0%, rgba(34, 197, 94, 0.03) 100%); border: 1px solid rgba(34, 197, 94, 0.3);' 
+          : 'background: var(--bg-card, #111a1c); border: 1px solid var(--bg-card-border, rgba(255,255,255,0.08));';
+
+        return `
+          <div class="scorecard-vertical-box animate-slide-up" style="${cardStyle} border-radius: var(--radius-lg); padding: var(--sp-3) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+            <!-- Bowler Header -->
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: var(--sp-2);">
+              <span style="font-weight: 700; font-size: var(--fs-md); color: var(--text-primary);">${escapeHtml(b.name)}</span>
+              <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                ${Number(b.maidens) > 0 ? `<span style="background:rgba(16, 185, 129, 0.15); color:#10b981; border:1px solid rgba(16, 185, 129, 0.3); font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px;">⚡ ${b.maidens} Mdn</span>` : ''}
+              </div>
+            </div>
+
+            <!-- Quick Stats Row -->
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <span style="font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 2px;">Overs</span>
+                <span style="font-size: 18px; color: var(--text-primary); font-weight: var(--fw-extrabold);">${b.overs} <span style="font-size:11px; font-weight:normal; color:var(--text-muted); font-family:var(--font-mono);">ov</span></span>
+              </div>
+              <div style="text-align: right;">
+                <span style="font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 2px;">Economy</span>
+                <span class="col-green" style="font-family: var(--font-mono); font-size: var(--fs-md); font-weight: bold; display: inline-flex; align-items: center; gap: 4px;">
+                  ${economyVal} ${economyBadge}
+                </span>
+              </div>
+            </div>
+
+            <!-- Maidens & Runs Given -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); background: rgba(0,0,0,0.15); border-radius: var(--radius-md); padding: var(--sp-2); text-align: center;">
+              <div>
+                <span style="font-size: 10px; color: var(--text-muted); display: block; text-transform: uppercase;">Maidens</span>
+                <span style="font-weight: var(--fw-bold); color: ${Number(b.maidens) > 0 ? '#10b981' : 'var(--text-primary)'}; font-size: var(--fs-sm);">${b.maidens || 0}</span>
+              </div>
+              <div style="border-left: 1px solid rgba(255,255,255,0.06);">
+                <span style="font-size: 10px; color: var(--text-muted); display: block; text-transform: uppercase;">Runs Given</span>
+                <span style="font-weight: var(--fw-bold); color: #ef4444; font-size: var(--fs-sm);">${b.runsGiven}</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="scorecard-section" style="margin-top:var(--sp-4);">
+          <div style="background:linear-gradient(90deg, rgba(34, 197, 94, 0.15) 0%, transparent 100%); padding:var(--sp-2) var(--sp-4); border-left:3px solid #22c55e; border-radius: 0 var(--radius-md) var(--radius-md) 0; margin-bottom:var(--sp-3); display:flex; align-items:center; gap:var(--sp-2);">
+            <span class="material-symbols-rounded" style="color:#22c55e; font-size:18px;">sports_cricket</span>
+            <div style="font-family:var(--font-heading); font-size:0.85rem; font-weight:var(--fw-extrabold); text-transform:uppercase; letter-spacing:0.05em; color:var(--text-primary);">${escapeHtml(title)}</div>
+          </div>
+          <div class="scorecard-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: var(--sp-3); margin-bottom: var(--sp-4);">
+            ${bowlingCards}
+          </div>
+        </div>
+      `;
+    };
+
+    let battingHtml = '';
+    if (play1stBatting.length > 0) {
+      battingHtml += renderBattingTableHTML(play1stBatting, (m.batting || []).some(x => x.innings === '2') ? 'Scorecard Batting Stats (1st Innings)' : 'Scorecard Batting Stats');
+    }
+    if (play2ndBatting.length > 0) {
+      battingHtml += renderBattingTableHTML(play2ndBatting, 'Scorecard Batting Stats (2nd Innings)');
+    }
+
+    let bowlingHtml = '';
+    if (play1stBowling.length > 0) {
+      bowlingHtml += renderBowlingTableHTML(play1stBowling, (m.bowling || []).some(x => x.innings === '2') ? 'Scorecard Bowling Stats (1st Innings)' : 'Scorecard Bowling Stats');
+    }
+    if (play2ndBowling.length > 0) {
+      bowlingHtml += renderBowlingTableHTML(play2ndBowling, 'Scorecard Bowling Stats (2nd Innings)');
+    }
+
+    let stageBadge = '';
+    if (m.stage === 'semifinal') {
+      stageBadge = `<span style="background:rgba(168, 85, 247, 0.15); color:#c084fc; border:1px solid rgba(168, 85, 247, 0.3); font-size:11px; font-weight:bold; padding:2px 8px; border-radius:12px; display:inline-flex; align-items:center; gap:4px; max-height:22px;">${icon('shield', 12)} Semi-Final</span>`;
+    } else if (m.stage === 'final') {
+      stageBadge = `<span style="background:rgba(234, 179, 8, 0.15); color:#facc15; border:1px solid rgba(234, 179, 8, 0.3); font-size:11px; font-weight:bold; padding:2px 8px; border-radius:12px; display:inline-flex; align-items:center; gap:4px; max-height:22px;">${icon('emoji_events', 12)} Final Match</span>`;
+    } else {
+      stageBadge = `<span style="background:rgba(255, 255, 255, 0.08); color:var(--text-muted); border:1px solid rgba(255, 255, 255, 0.15); font-size:11px; font-weight:bold; padding:2px 8px; border-radius:12px; display:inline-flex; align-items:center; gap:4px; max-height:22px;">${icon('table_rows', 12)} League Match</span>`;
+    }
 
     return `
-      <div class="match-block">
-        <div class="match-block-header">
-          <span class="match-block-title">${escapeHtml(m.team1)} vs ${escapeHtml(m.team2)}</span>
+      <div class="match-block ${isNewest ? 'match-block-newest' : ''}">
+        <div class="match-block-header" style="flex-wrap: wrap; gap: var(--sp-2);">
+          <div style="display:flex; flex-direction:column; gap:var(--sp-1);">
+            <div style="display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap;">
+              ${stageBadge}
+              <span class="match-block-title">${escapeHtml(m.team1)} vs ${escapeHtml(m.team2)}</span>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); display:flex; align-items:center; gap:4px; margin-left:var(--sp-1);">
+              ${icon('account_circle', 12)} <span style="font-weight:600">Created by:</span> <span style="color:#1ec9a6; font-weight:700">${escapeHtml(m.creatorName || m.creator || 'Tournament Admin')}</span>
+            </div>
+          </div>
           <div style="display:flex;align-items:center;gap:var(--sp-2)">
             <span class="match-block-status text-green">${m.matchWinner ? 'Match result state finalized' : 'Pending'}</span>
+            <button class="btn btn-outline btn-sm invite-match-players-btn" data-id="${m.id}" title="Invite Players" style="display:flex; align-items:center; gap:4px; padding:var(--sp-1) var(--sp-2); font-size:var(--fs-xs);">
+              ${icon('person_add', 14)} Invite
+            </button>
             ${isAdmin ? `
               <button class="btn btn-ghost btn-sm edit-match-btn" data-id="${m.id}" title="Edit">${icon('edit', 16)}</button>
               <button class="btn btn-ghost btn-sm delete-match-btn" data-id="${m.id}" title="Delete">${icon('delete', 16)}</button>
@@ -202,50 +482,61 @@ export function renderWorkspace(app, navigate, params = {}) {
         </div>
 
         <!-- Match Info -->
-        <div class="match-info-card">
-          <div>
-            <div class="match-info-item-label">Toss Who Win</div>
-            <div class="match-info-item-value">${escapeHtml(m.tossWinner || '-')}</div>
+        <div class="match-info-card" style="gap:var(--sp-4); background:rgba(30, 41, 59, 0.45); border:1px solid rgba(255,255,255,0.08); border-radius:var(--radius-lg); padding:var(--sp-4); box-shadow:0 8px 30px rgba(0,0,0,0.3); backdrop-filter:blur(6px); margin-bottom:var(--sp-4);">
+          <div class="match-info-item" style="border-left:3px solid #6366f1; background:rgba(99, 102, 241, 0.05); padding:var(--sp-3) var(--sp-4); border-radius:0 var(--radius-md) var(--radius-md) 0; display:flex; align-items:center; gap:var(--sp-3)">
+            <div style="background:rgba(99, 102, 241, 0.15); width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#818cf8; flex-shrink:0">
+              ${icon('swap_horizontal_circle', 20)}
+            </div>
+            <div>
+              <div class="match-info-item-label" style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); font-weight:var(--fw-bold); margin-bottom:2px">Toss Won By</div>
+              <div class="match-info-item-value" style="font-size:var(--fs-md); color:var(--text-primary); font-weight:var(--fw-extrabold)">${escapeHtml(m.tossWinner || '-')}</div>
+            </div>
           </div>
-          <div>
-            <div class="match-info-item-label">Pitch Condition</div>
-            <div class="match-info-item-value">${escapeHtml(m.pitchCondition || '-')}</div>
+          <div class="match-info-item" style="border-left:3px solid #06b6d4; background:rgba(6, 182, 212, 0.05); padding:var(--sp-3) var(--sp-4); border-radius:0 var(--radius-md) var(--radius-md) 0; display:flex; align-items:center; gap:var(--sp-3)">
+            <div style="background:rgba(6, 182, 212, 0.15); width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#22d3ee; flex-shrink:0">
+              ${icon('grass', 20)}
+            </div>
+            <div>
+              <div class="match-info-item-label" style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); font-weight:var(--fw-bold); margin-bottom:2px">Pitch Condition</div>
+              <div class="match-info-item-value" style="font-size:var(--fs-md); color:var(--text-primary); font-weight:var(--fw-extrabold)">${escapeHtml(m.pitchCondition || '-')}</div>
+            </div>
           </div>
-          <div>
-            <div class="match-info-item-label" style="color:var(--accent-green)">Match Who Win</div>
-            <div class="match-info-item-value" style="color:var(--accent-green)">${escapeHtml(m.matchWinner || '-')}</div>
+          <div class="match-info-item" style="border-left:3px solid #eab308; background:rgba(234, 179, 8, 0.08); border:1px solid rgba(234, 179, 8, 0.2); padding:var(--sp-3) var(--sp-4); border-radius:0 var(--radius-md) var(--radius-md) 0; display:flex; align-items:center; gap:var(--sp-3); position:relative; overflow:hidden">
+            <div style="background:rgba(234, 179, 8, 0.22); width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fde047; flex-shrink:0">
+              ${icon('emoji_events', 20)}
+            </div>
+            <div style="z-index:2">
+              <div class="match-info-item-label" style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.05em; color:#fde047; font-weight:var(--fw-extrabold); margin-bottom:2px">Match Winner</div>
+              <div class="match-info-item-value" style="font-size:var(--fs-md); color:#4ade80; font-weight:var(--fw-black); text-shadow:0 0 10px rgba(74,222,128,0.4)">${escapeHtml(m.matchWinner || '-')}</div>
+            </div>
+            <div style="position:absolute; right:-10px; bottom:-10px; opacity:0.35; transform:rotate(-15deg); color:#eab308">
+              ${icon('military_tech', 64)}
+            </div>
           </div>
         </div>
 
-        ${m.videoName ? `
-          <div class="video-card" style="margin-top:var(--sp-3)">
-            ${icon('play_circle', 24)} <span>Local Video Selected File Name: ${escapeHtml(m.videoName)}</span>
+        ${(m.videoName || m.videoUrl) ? `
+          <div class="match-video-actions-wrapper">
+            <div class="video-card animate-pulse-subtle" style="flex:1; margin:0; cursor:pointer; display:flex; align-items:center; gap:var(--sp-3); border:1px solid rgba(0, 229, 255, 0.3); background:rgba(0, 229, 255, 0.06); padding:var(--sp-3); border-radius:var(--radius-md);" data-play-video-id="${m.id}" title="Click to review video inside this dashboard">
+              <span style="color:var(--accent-cyan, #00E5FF); display:inline-flex;">${icon('play_circle', 26)}</span>
+              <div style="text-align:left;">
+                <span style="font-weight:700; color:var(--accent-cyan, #00E5FF); display:block; font-size:var(--fs-sm); margin-bottom:2px;">Play In-App Player</span>
+                <span style="color:var(--text-muted); font-size:11px; display:block; opacity:0.85;">
+                  ${m.videoName ? `File: ${escapeHtml(m.videoName)}` : 'Highlights stream link'}
+                </span>
+              </div>
+            </div>
+            ${m.videoUrl ? `
+              <a href="${m.videoUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-outline" style="display:flex; align-items:center; justify-content:center; gap:8px; background:rgba(0, 229, 255, 0.1); border-color:rgba(0, 229, 255, 0.35); color:var(--accent-cyan); font-weight:700; font-size:12px; padding:0 var(--sp-4); text-decoration:none; border-radius:var(--radius-md);" title="Open in external players / regular browser tab">
+                ${icon('open_in_new', 18)} Browser / Apps
+              </a>
+            ` : ''}
           </div>
         ` : ''}
 
-        ${battingRows ? `
-          <div class="scorecard-section">
-            <div class="scorecard-label text-orange">Scorecard Batting Stats</div>
-            <div class="points-table-wrap">
-              <table class="data-table">
-                <thead><tr><th>Name</th><th>Runs (Balls)</th><th>4s</th><th>6s</th><th style="color:var(--accent-green)">SR</th></tr></thead>
-                <tbody>${battingRows}</tbody>
-              </table>
-            </div>
-          </div>
-        ` : ''}
+        ${battingHtml}
 
-        ${bowlingRows ? `
-          <div class="scorecard-section">
-            <div class="scorecard-label text-orange">Scorecard Bowling Stats</div>
-            <div class="points-table-wrap">
-              <table class="data-table">
-                <thead><tr><th>Name</th><th>Overs</th><th>Meden</th><th>Runs Gave</th><th style="color:var(--accent-green)">Economy</th></tr></thead>
-                <tbody>${bowlingRows}</tbody>
-              </table>
-            </div>
-          </div>
-        ` : ''}
+        ${bowlingHtml}
       </div>
     `;
   }
@@ -285,12 +576,29 @@ export function renderWorkspace(app, navigate, params = {}) {
               </div>
             </div>
 
-            <div class="form-group" style="margin-top:var(--sp-3)">
-              <label class="form-label">Upload Video from Gallery Assets</label>
-              <div class="file-input-wrap">
-                <label class="file-input-btn" for="mVideo">Choose File</label>
-                <input type="file" id="mVideo" accept="video/mp4,video/quicktime" style="display:none" />
-                <span class="file-input-name" id="mVideoName">${existing?.videoName || 'No file chosen'}</span>
+            <div class="form-row" style="margin-top:var(--sp-3)">
+              <div class="form-group">
+                <label class="form-label" style="color:var(--accent-cyan); font-weight:bold;">Match Stage / Format Round</label>
+                <select class="form-input" id="mStage" style="width:100%; background:var(--bg-card); color:var(--text-primary); border:1px solid var(--bg-card-border); border-radius:var(--radius-md); padding:0 var(--sp-2);">
+                  <option value="regular" ${(!existing?.stage || existing?.stage === 'regular') ? 'selected' : ''}>League Stage / Regular match</option>
+                  <option value="semifinal" ${existing?.stage === 'semifinal' ? 'selected' : ''}>Semi Final / Playoff</option>
+                  <option value="final" ${existing?.stage === 'final' ? 'selected' : ''}>Tournament Final Match</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row form-row-2" style="margin-top:var(--sp-3)">
+              <div class="form-group">
+                <label class="form-label">Upload Local Video Highlights</label>
+                <div class="file-input-wrap">
+                  <label class="file-input-btn" for="mVideo">Choose File</label>
+                  <input type="file" id="mVideo" accept="video/mp4,video/quicktime" style="display:none" />
+                  <span class="file-input-name" id="mVideoName">${existing?.videoName || 'No file chosen'}</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label form-label-colored">Or Match Video Stream / YouTube URL</label>
+                <input type="url" class="form-input" id="mVideoUrl" placeholder="https://youtube.com/... or mp4 link" value="${escapeHtml(existing?.videoUrl || '')}" style="width:100%" />
               </div>
             </div>
 
@@ -323,9 +631,17 @@ export function renderWorkspace(app, navigate, params = {}) {
 
     let battingIdx = (existing?.batting || [{}]).length;
     let bowlingIdx = (existing?.bowling || [{}]).length;
+    let selectedVideoFile = null;
 
     document.getElementById('mVideo').addEventListener('change', (e) => {
-      document.getElementById('mVideoName').textContent = e.target.files[0]?.name || 'No file chosen';
+      const file = e.target.files[0];
+      if (file) {
+        selectedVideoFile = file;
+        document.getElementById('mVideoName').textContent = file.name;
+      } else {
+        selectedVideoFile = null;
+        document.getElementById('mVideoName').textContent = 'No file chosen';
+      }
     });
 
     document.getElementById('addBattingRow').addEventListener('click', () => {
@@ -344,8 +660,11 @@ export function renderWorkspace(app, navigate, params = {}) {
     document.getElementById('closeMatchModal').addEventListener('click', () => modalRoot.innerHTML = '');
     document.getElementById('cancelMatch').addEventListener('click', () => modalRoot.innerHTML = '');
 
-    document.getElementById('matchForm').addEventListener('submit', (e) => {
+    document.getElementById('matchForm').addEventListener('submit', async (e) => {
       e.preventDefault();
+      const videoName = document.getElementById('mVideoName').textContent !== 'No file chosen' ? document.getElementById('mVideoName').textContent : '';
+      const videoUrl = document.getElementById('mVideoUrl').value.trim();
+      const currentUser = store.getCurrentUser();
       const matchData = {
         seasonId,
         team1: document.getElementById('mTeam1').value.trim(),
@@ -353,18 +672,54 @@ export function renderWorkspace(app, navigate, params = {}) {
         tossWinner: document.getElementById('mToss').value.trim(),
         pitchCondition: document.getElementById('mPitch').value.trim(),
         matchWinner: document.getElementById('mWinner').value.trim(),
-        videoName: document.getElementById('mVideoName').textContent !== 'No file chosen' ? document.getElementById('mVideoName').textContent : '',
+        stage: document.getElementById('mStage').value,
+        videoName,
+        videoUrl,
+        creator: existing?.creator || currentUser?.username || 'admin',
+        creatorName: existing?.creatorName || currentUser?.fullName || currentUser?.name || currentUser?.username || 'Tournament Admin',
         batting: collectBattingRows(),
         bowling: collectBowlingRows(),
       };
 
+      let savedMatchId;
       if (isEdit) {
         store.updateMatch(existing.id, matchData);
+        savedMatchId = existing.id;
         showToast('Match updated!', 'success');
       } else {
-        store.addMatch(matchData);
+        const newMatch = store.addMatch(matchData);
+        savedMatchId = newMatch.id;
         showToast('Match created!', 'success');
       }
+
+      if (selectedVideoFile && savedMatchId) {
+        showToast('Saving video locally...', 'info');
+        // Run video storage and cloud syncing asynchronously in the background so the UI doesn't hang
+        (async () => {
+          try {
+            // Convert File to plain structured Blob for guaranteed cloning
+            const plainBlob = new Blob([selectedVideoFile], { type: selectedVideoFile.type });
+            await videoStore.saveVideo(savedMatchId, plainBlob);
+            showToast('Video saved locally!', 'success');
+
+            // Upload to cloud in the background
+            const downloadUrl = await uploadVideoToFirebase(savedMatchId, selectedVideoFile);
+            if (downloadUrl) {
+              store.updateMatch(savedMatchId, { videoUrl: downloadUrl });
+              showToast('Video synced up to server! Ready for all phones.', 'success');
+              // Refresh match list dynamically if user is still on the matches tab
+              const activeContainer = document.getElementById('tabContent');
+              if (activeContainer && activeTab === TABS.MATCH_DETAILS) {
+                renderMatchDetails(activeContainer);
+              }
+            }
+          } catch (err) {
+            console.error('Failed to store video:', err);
+            showToast('Video saved locally only. Cloud sync skipped/failed.', 'warning');
+          }
+        })();
+      }
+
       modalRoot.innerHTML = '';
       renderMatchDetails(document.getElementById('tabContent'));
     });
@@ -375,10 +730,17 @@ export function renderWorkspace(app, navigate, params = {}) {
 
   function battingRowHTML(b = {}, idx = 0) {
     return `
-      <div class="form-row form-row-6" style="margin-bottom:var(--sp-2)" data-batting-row>
+      <div class="form-row form-row-7" style="margin-bottom:var(--sp-2)" data-batting-row>
         <div class="form-group"><label class="form-label">Name</label><input type="text" class="form-input form-input-sm bat-name" value="${escapeHtml(b.name || '')}" /></div>
+        <div class="form-group">
+          <label class="form-label">Innings</label>
+          <select class="form-input form-input-sm bat-innings">
+            <option value="1" ${b.innings === '2' ? '' : 'selected'}>1st Innings</option>
+            <option value="2" ${b.innings === '2' ? 'selected' : ''}>2nd Innings</option>
+          </select>
+        </div>
         <div class="form-group"><label class="form-label">Runs</label><input type="number" class="form-input form-input-sm bat-runs" value="${b.runs || 0}" min="0" /></div>
-        <div class="form-group"><label class="form-label">Runs in how many balls</label><input type="number" class="form-input form-input-sm bat-balls" value="${b.balls || 0}" min="0" /></div>
+        <div class="form-group"><label class="form-label">Balls</label><input type="number" class="form-input form-input-sm bat-balls" value="${b.balls || 0}" min="0" /></div>
         <div class="form-group"><label class="form-label">4s</label><input type="number" class="form-input form-input-sm bat-fours" value="${b.fours || 0}" min="0" /></div>
         <div class="form-group"><label class="form-label">6s</label><input type="number" class="form-input form-input-sm bat-sixes" value="${b.sixes || 0}" min="0" /></div>
         <div class="form-group"><label class="form-label form-label-red">Strike Rate (SR)</label><input type="text" class="form-input form-input-sm bat-sr" readonly value="${b.runs && b.balls ? calcStrikeRate(b.runs, b.balls) : ''}" style="color:var(--accent-green)" /></div>
@@ -388,11 +750,18 @@ export function renderWorkspace(app, navigate, params = {}) {
 
   function bowlingRowHTML(b = {}, idx = 0) {
     return `
-      <div class="form-row form-row-5" style="margin-bottom:var(--sp-2)" data-bowling-row>
+      <div class="form-row form-row-6" style="margin-bottom:var(--sp-2)" data-bowling-row>
         <div class="form-group"><label class="form-label">Name</label><input type="text" class="form-input form-input-sm bowl-name" value="${escapeHtml(b.name || '')}" /></div>
+        <div class="form-group">
+          <label class="form-label">Innings</label>
+          <select class="form-input form-input-sm bowl-innings">
+            <option value="1" ${b.innings === '2' ? '' : 'selected'}>1st Innings</option>
+            <option value="2" ${b.innings === '2' ? 'selected' : ''}>2nd Innings</option>
+          </select>
+        </div>
         <div class="form-group"><label class="form-label">Overs</label><input type="number" class="form-input form-input-sm bowl-overs" value="${b.overs || 0}" min="0" step="0.1" /></div>
-        <div class="form-group"><label class="form-label">Medin (Maidens)</label><input type="number" class="form-input form-input-sm bowl-maidens" value="${b.maidens || 0}" min="0" /></div>
-        <div class="form-group"><label class="form-label">how many runs the bowler gave</label><input type="number" class="form-input form-input-sm bowl-runs" value="${b.runsGiven || 0}" min="0" /></div>
+        <div class="form-group"><label class="form-label">Maidens</label><input type="number" class="form-input form-input-sm bowl-maidens" value="${b.maidens || 0}" min="0" /></div>
+        <div class="form-group"><label class="form-label">Runs</label><input type="number" class="form-input form-input-sm bowl-runs" value="${b.runsGiven || 0}" min="0" /></div>
         <div class="form-group"><label class="form-label form-label-green">Economy</label><input type="text" class="form-input form-input-sm bowl-eco" readonly value="${b.overs && b.runsGiven ? calcEconomy(b.runsGiven, b.overs) : ''}" style="color:var(--accent-green)" /></div>
       </div>
     `;
@@ -429,6 +798,7 @@ export function renderWorkspace(app, navigate, params = {}) {
       if (!name) return;
       rows.push({
         name,
+        innings: row.querySelector('.bat-innings')?.value || '1',
         runs: Number(row.querySelector('.bat-runs')?.value) || 0,
         balls: Number(row.querySelector('.bat-balls')?.value) || 0,
         fours: Number(row.querySelector('.bat-fours')?.value) || 0,
@@ -445,6 +815,7 @@ export function renderWorkspace(app, navigate, params = {}) {
       if (!name) return;
       rows.push({
         name,
+        innings: row.querySelector('.bowl-innings')?.value || '1',
         overs: Number(row.querySelector('.bowl-overs')?.value) || 0,
         maidens: Number(row.querySelector('.bowl-maidens')?.value) || 0,
         runsGiven: Number(row.querySelector('.bowl-runs')?.value) || 0,
@@ -621,14 +992,15 @@ export function renderWorkspace(app, navigate, params = {}) {
       </div>
     `;
 
+
     document.getElementById('addPointsBtn')?.addEventListener('click', () => showPointsModal());
     document.querySelectorAll('.delete-pts-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        if (confirm('Delete this entry?')) {
+        showConfirm('Delete Entry', 'Are you sure you want to delete this points entry row?', () => {
           store.deletePointsEntry(btn.dataset.id);
           showToast('Entry deleted', 'success');
           renderPointsTable(container);
-        }
+        });
       });
     });
   }
@@ -726,11 +1098,11 @@ export function renderWorkspace(app, navigate, params = {}) {
     document.getElementById('addScheduleBtn')?.addEventListener('click', () => showScheduleModal());
     document.querySelectorAll('.delete-sched-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        if (confirm('Delete this schedule entry?')) {
+        showConfirm('Delete Schedule Entry', 'Are you sure you want to delete this schedule entry?', () => {
           store.deleteScheduleEntry(btn.dataset.id);
           showToast('Schedule entry deleted', 'success');
           renderSchedule(container);
-        }
+        });
       });
     });
   }
@@ -807,11 +1179,11 @@ export function renderWorkspace(app, navigate, params = {}) {
     document.getElementById('addMemberBtn')?.addEventListener('click', () => showMemberModal());
     document.querySelectorAll('.delete-player-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        if (confirm('Remove this team member?')) {
+        showConfirm('Remove Team Member', 'Are you sure you want to remove this team member?', () => {
           store.deletePlayer(btn.dataset.id);
           showToast('Member removed', 'success');
           renderTeamMembers(container);
-        }
+        });
       });
     });
   }
@@ -950,11 +1322,11 @@ export function renderWorkspace(app, navigate, params = {}) {
 
     document.querySelectorAll('.delete-meeting-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        if (confirm('Are you sure you want to delete this meeting room and all its chat history?')) {
+        showConfirm('Delete Meeting Room', 'Are you sure you want to delete this meeting room and all its chat history?', () => {
           store.deleteGroupMeeting(btn.dataset.id);
           showToast('Meeting deleted', 'success');
           renderMeetingList(container);
-        }
+        });
       });
     });
   }
@@ -1009,6 +1381,130 @@ export function renderWorkspace(app, navigate, params = {}) {
       showToast('Meeting scheduled!', 'success');
       renderMeetingList(container);
     });
+  }
+
+  function showMatchInviteModal(matchId) {
+    const modalRoot = document.getElementById('modal-root');
+    const matches = store.getMatches(seasonId);
+    const match = matches.find(m => m.id === matchId);
+    if (!match) return;
+
+    const allUsers = store.getUsers();
+    const currentUser = store.getCurrentUser();
+    const inviteableUsers = allUsers.filter(u => u.username !== currentUser.username);
+
+    const shareUrl = `${window.location.origin}/?inviteType=match&inviteId=${encodeURIComponent(matchId)}`;
+    const shareText = `Hey! Join/follow this cricket match: "${match.team1} vs ${match.team2}" on our seasons framework. Check it out here: ${shareUrl}`;
+
+    function renderModalContent() {
+      const currentMatch = store.getMatches(seasonId).find(m => m.id === matchId);
+      const invitedSet = new Set(currentMatch?.invitedUsers || []);
+
+      modalRoot.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-content" style="max-width:440px; max-height:85vh; overflow-y:auto; padding:var(--sp-5);">
+            <div class="modal-title" style="margin-bottom:var(--sp-2);">${icon('sports_cricket', 24)} Invite Players to Match</div>
+            <button class="modal-close" id="closeMatchInviteModal">${icon('close')}</button>
+            
+            <p style="color:var(--text-muted); font-size:var(--fs-sm); margin-bottom:var(--sp-4);">
+              Invite other players to the match: <strong>${escapeHtml(match.team1)} vs ${escapeHtml(match.team2)}</strong>.
+            </p>
+
+            <h4 style="font-family:var(--font-heading); font-weight:var(--fw-bold); font-size:var(--fs-sm); margin-bottom:var(--sp-2); color:var(--text-primary);">Invite App Users</h4>
+            <div style="border-top:1px solid var(--bg-card-border); padding-top:var(--sp-2); display:flex; flex-direction:column; gap:var(--sp-2); max-height:220px; overflow-y:auto; padding-right:4px; margin-bottom:var(--sp-4);">
+              ${inviteableUsers.length === 0
+                ? '<div style="color:var(--text-muted); text-align:center; font-size:var(--fs-sm); padding:var(--sp-4)">No other players found.</div>'
+                : inviteableUsers.map(u => {
+                    const isAlreadyInvited = invitedSet.has(u.username);
+                    return `
+                      <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.02); border:1px solid var(--bg-card-border); padding:var(--sp-2) var(--sp-3); border-radius:var(--radius-md);">
+                        <div>
+                          <div style="font-weight:var(--fw-bold); font-size:var(--fs-sm);">${escapeHtml(u.fullName)}</div>
+                          <div style="font-size:10px; color:var(--text-muted);">@${escapeHtml(u.username)}</div>
+                        </div>
+                        <button class="btn btn-sm ${isAlreadyInvited ? 'btn-outline' : 'btn-success'} invite-match-user-action-btn" data-username="${u.username}" ${isAlreadyInvited ? 'disabled' : ''}>
+                          ${isAlreadyInvited ? 'Invited' : 'Invite'}
+                        </button>
+                      </div>
+                    `;
+                  }).join('')
+              }
+            </div>
+
+            <!-- Share outer options requested by user -->
+            <div style="border-top:1px solid var(--bg-card-border); padding-top:var(--sp-4);">
+              <h4 style="font-family:var(--font-heading); font-weight:var(--fw-bold); font-size:var(--fs-sm); margin-bottom:var(--sp-2); color:var(--text-primary);">Share with Friends Outside App</h4>
+              
+              <div style="background:var(--bg-secondary, #151f21); border:1px solid var(--bg-card-border); border-radius:var(--radius-md); padding:var(--sp-2) var(--sp-3); display:flex; gap:var(--sp-2); align-items:center; margin-bottom:var(--sp-3);">
+                <div style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--text-primary); text-align:left;">
+                  ${escapeHtml(shareUrl)}
+                </div>
+                <button class="btn btn-primary btn-sm" id="copyMatchShareBtn" style="flex-shrink:0;">
+                  ${icon('content_copy', 12)} Copy
+                </button>
+              </div>
+
+              <div style="display:flex; flex-direction:column; gap:var(--sp-2);">
+                <a href="https://api.whatsapp.com/send?text=${encodeURIComponent(shareText)}" target="_blank" class="btn btn-outline btn-sm animate-button" style="display:flex; align-items:center; justify-content:center; gap:var(--sp-2); border-color:#25d366; color:#25d366; background:rgba(37,211,102,0.05); text-decoration:none;">
+                  <span class="material-symbols-rounded" style="font-size:16px;">chat</span> Share on WhatsApp
+                </a>
+                <a href="mailto:?subject=${encodeURIComponent('Cricket Match Invitation Code')}&body=${encodeURIComponent(shareText)}" class="btn btn-outline btn-sm" style="display:flex; align-items:center; justify-content:center; gap:var(--sp-2); text-decoration:none; color:var(--text-primary);">
+                  ${icon('mail', 16)} Email Invite Link
+                </a>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      `;
+
+      document.getElementById('closeMatchInviteModal').addEventListener('click', () => modalRoot.innerHTML = '');
+
+      const copyBtn = document.getElementById('copyMatchShareBtn');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(shareText).then(() => {
+            showToast('Invite details copied!', 'success');
+          }).catch(() => {
+            showToast('Failed to copy. Please copy link manually.', 'warning');
+          });
+        });
+      }
+
+      document.querySelectorAll('.invite-match-user-action-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const username = btn.dataset.username;
+          
+          // Update match invited users list
+          const matches = store.getMatches(seasonId);
+          const idx = matches.findIndex(m => m.id === matchId);
+          if (idx !== -1) {
+            matches[idx].invitedUsers = matches[idx].invitedUsers || [];
+            if (!matches[idx].invitedUsers.includes(username)) {
+              matches[idx].invitedUsers.push(username);
+              store._set('lca_matches', matches);
+              store.pushToFirebase('matches', matchId, matches[idx]);
+            }
+          }
+
+          // Create notification
+          store.addNotification({
+            type: 'match_invitation',
+            title: 'Match Invitation',
+            message: `@${currentUser.username} invited you to check out or participate in the match: ${match.team1} vs ${match.team2}`,
+            recipient: username,
+            createdBy: currentUser.username,
+            targetId: matchId,
+            seasonId: seasonId
+          });
+
+          showToast(`Invited @${username}`, 'success');
+          renderModalContent();
+        });
+      });
+    }
+
+    renderModalContent();
   }
 
   function showInviteModal(meetingId) {
@@ -1079,6 +1575,18 @@ export function renderWorkspace(app, navigate, params = {}) {
         btn.addEventListener('click', () => {
           const username = btn.dataset.username;
           store.inviteUserToMeeting(meetingId, username);
+
+          // Create notification
+          store.addNotification({
+            type: 'chat_invitation',
+            title: 'Chat Room Invitation',
+            message: `@${currentUser.username} invited you to join the group chat: ${meeting.title}`,
+            recipient: username,
+            createdBy: currentUser.username,
+            targetId: meetingId,
+            seasonId: seasonId
+          });
+
           showToast(`Invited @${username}`, 'success');
           renderModalContent();
         });
@@ -1228,3 +1736,97 @@ export function renderWorkspace(app, navigate, params = {}) {
   }
   render();
 }
+
+function getEmbedUrl(url) {
+  if (!url) return '';
+  let videoId = '';
+  if (url.includes('youtube.com/watch')) {
+    try {
+      const urlParams = new URLSearchParams(new URL(url).search);
+      videoId = urlParams.get('v');
+    } catch (e) {}
+  } else if (url.includes('youtu.be/')) {
+    videoId = url.split('youtu.be/')[1]?.split('?')[0];
+  } else if (url.includes('youtube.com/embed/')) {
+    return url;
+  }
+  if (videoId) {
+    return `https://www.youtube.com/embed/${videoId}`;
+  }
+  
+  if (url.includes('vimeo.com/')) {
+    const parts = url.split('vimeo.com/');
+    const id = parts[parts.length - 1]?.split('?')[0];
+    if (id && !isNaN(parseInt(id, 10))) {
+      return `https://player.vimeo.com/video/${id}`;
+    }
+  }
+  return '';
+}
+
+function showVideoPlayerModal(match, videoUrl, isBlob = false) {
+  const modalRoot = document.getElementById('modal-root');
+  if (!modalRoot) return;
+
+  const embedUrl = getEmbedUrl(videoUrl);
+  let playerHtml = '';
+  if (embedUrl) {
+    playerHtml = `<iframe src="${embedUrl}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen style="width:100%; height:100%; border:none;"></iframe>`;
+  } else {
+    playerHtml = `<video id="playerElement" src="${videoUrl}" controls autoplay style="width:100%; height:100%; object-fit:contain; background:#000;"></video>`;
+  }
+
+  modalRoot.innerHTML = `
+    <div class="modal-overlay" style="z-index: 9999;">
+      <div class="modal-content animate-slide-up" style="max-width:760px; padding:var(--sp-5); border: 1px solid rgba(0, 229, 255, 0.2); background: #120726;">
+        <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--sp-4)">
+          <h3 class="modal-title" style="color:var(--text-primary); font-size:var(--fs-lg); display:flex; align-items:center; gap:var(--sp-2)">
+            <span class="material-symbols-rounded" style="color:var(--accent-cyan); font-size: 28px;">smart_display</span>
+            <span>Video Review: ${escapeHtml(match.team1)} vs ${escapeHtml(match.team2)}</span>
+          </h3>
+          <button class="modal-close" id="closeVideoBtn" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; display:flex; align-items:center; justify-content:center;">
+            <span class="material-symbols-rounded">close</span>
+          </button>
+        </div>
+
+        <div style="background:#020105; border-radius:var(--radius-md); border:1px solid rgba(255,255,255,0.05); overflow:hidden; display:flex; align-items:center; justify-content:center; box-shadow: 0 10px 40px rgba(0,0,0,0.8); position:relative; aspect-ratio: 16/9;">
+          ${playerHtml}
+        </div>
+
+        <p style="margin-top:var(--sp-3); font-size:var(--fs-xs); color:var(--text-muted); display:flex; align-items:center; gap:6px;">
+          <span class="material-symbols-rounded" style="font-size:16px; color:var(--accent-cyan)">info</span> 
+          <span>${isBlob ? 'High-definition playback loaded from sandbox offline repository cache.' : 'Streaming direct video resource link.'} External players may fail to load in restricted browsers; if so, please use the actions below.</span>
+        </p>
+
+        <div class="modal-actions" style="margin-top:var(--sp-4); display:flex; gap:var(--sp-2); flex-wrap:wrap;">
+          <button type="button" class="btn btn-outline" id="closeVideoBottomBtn">Close Review</button>
+          ${isBlob ? `
+            <a href="${videoUrl}" download="${(match.videoName || 'match_video.mp4')}" class="btn btn-primary" style="display:inline-flex; align-items:center; gap:6px; text-decoration:none;">
+              ${icon('download', 16)} Download Clip File
+            </a>
+          ` : `
+            <a href="${videoUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="display:inline-flex; align-items:center; gap:6px; text-decoration:none;">
+              ${icon('open_in_new', 16)} Open Stream Link in New Tab
+            </a>
+          `}
+        </div>
+      </div>
+    </div>
+  `;
+
+  const closeFn = () => {
+    const player = document.getElementById('playerElement');
+    if (player) {
+       player.pause();
+       player.src = "";
+    }
+    if (isBlob) {
+      URL.revokeObjectURL(videoUrl);
+    }
+    modalRoot.innerHTML = '';
+  };
+
+  document.getElementById('closeVideoBtn').addEventListener('click', closeFn);
+  document.getElementById('closeVideoBottomBtn').addEventListener('click', closeFn);
+}
+

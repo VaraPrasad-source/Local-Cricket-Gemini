@@ -1,0 +1,13 @@
+import type { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: 'com.vara.localcricket',
+  appName: 'Local Cricket App',
+  webDir: 'dist',
+  server: {
+    url: 'https://ais-pre-irms533zxxorgmc66ewbll-893288307572.asia-east1.run.app',
+    cleartext: true
+  }
+};
+
+export default config;

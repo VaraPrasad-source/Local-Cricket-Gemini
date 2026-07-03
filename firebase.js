@@ -25,18 +25,14 @@
 //
 // ============================================
 
-export const USE_FIREBASE = true; // Set to true after adding your config
+import firebaseConfig from './firebase-applet-config.json';
+import { initializeApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getFirestore, initializeFirestore } from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getAnalytics } from 'firebase/analytics';
 
-const firebaseConfig = {
-  apiKey: "AIzaSyDbu7eTe33ds3ncrPE_5oaH9qXiohna9II",
-  authDomain: "gemini-local-cricket-app.firebaseapp.com",
-  projectId: "gemini-local-cricket-app",
-  storageBucket: "gemini-local-cricket-app.firebasestorage.app",
-  messagingSenderId: "523544090143",
-  appId: "1:523544090143:web:04c0b63f9f1fa602c4272a",
-  measurementId: "G-M4B4TEN95X",
-  firestoreDatabaseId: "ai-studio-498d836a-640f-41f6-9e66-0b1b35b3ec97"
-};
+export const USE_FIREBASE = true; // Set to true after adding your config
 
 let app = null;
 let auth = null;
@@ -48,12 +44,6 @@ export async function initFirebase() {
   if (!USE_FIREBASE) return;
   
   try {
-    const { initializeApp } = await import('firebase/app');
-    const { getAuth } = await import('firebase/auth');
-    const { getFirestore, initializeFirestore } = await import('firebase/firestore');
-    const { getStorage } = await import('firebase/storage');
-    const { getAnalytics } = await import('firebase/analytics');
-    
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
     
@@ -84,3 +74,20 @@ export function getFirebaseAuth() { return auth; }
 export function getFirebaseDB() { return db; }
 export function getFirebaseStorage() { return storage; }
 export function getFirebaseAnalytics() { return analytics; }
+
+export async function uploadVideoToFirebase(matchId, file) {
+  if (!USE_FIREBASE || !storage) {
+    console.warn('Firebase Storage is disabled or not initialized.');
+    return null;
+  }
+  try {
+    const storageRef = ref(storage, `videos/${matchId}_${file.name}`);
+    const snapshot = await uploadBytes(storageRef, file);
+    const downloadUrl = await getDownloadURL(snapshot.ref);
+    return downloadUrl;
+  } catch (error) {
+    console.error('Firebase Storage upload failed:', error);
+    throw error;
+  }
+}
+

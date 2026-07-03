@@ -3,7 +3,7 @@
   "appId": "1:523544090143:web:04c0b63f9f1fa602c4272a",
   "apiKey": "AIzaSyDbu7eTe33ds3ncrPE_5oaH9qXiohna9II",
   "authDomain": "gemini-local-cricket-app.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-498d836a-640f-41f6-9e66-0b1b35b3ec97",
+  "firestoreDatabaseId": "",
   "storageBucket": "gemini-local-cricket-app.firebasestorage.app",
   "messagingSenderId": "523544090143",
   "measurementId": "G-M4B4TEN95X"

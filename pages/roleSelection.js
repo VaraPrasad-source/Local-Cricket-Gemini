@@ -12,8 +12,7 @@ export function renderRoleSelection(app, navigate) {
           <div class="app-logo">
             <span class="material-symbols-rounded icon-glow">sports_cricket</span>
           </div>
-          <h1>local Crickret App</h1>
-          <p>Live Scores, Tournaments & fan Engagement console</p>
+          <h1>Local Cricket App</h1>
         </div>
 
         <div class="role-cards-grid">
